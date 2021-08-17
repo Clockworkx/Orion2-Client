@@ -8,6 +8,8 @@
 */
 #include "WinSockHook.h"
 #include "NMCOHook.h"
+#include <string>
+
 
 /* WSPConnect */
 static LPWSPCONNECT _WSPConnect = NULL;
@@ -20,16 +22,87 @@ static LPWSPSTARTUP _WSPStartup = NULL;
 DWORD dwHostAddress = 0;
 /* The re-routed socket host address */
 DWORD dwRouteAddress = 0;
+//Original port
+DWORD dwOriginalPort = 0;
+//Re-routed port
+DWORD dwRoutePort = 0;
+
+const WCHAR* GetParameter(const WCHAR* ArgumentName) {
+	LPWSTR* szArglist;
+	int nArgs;
+
+	szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
+	if (szArglist == NULL) {
+		wprintf(L"CommandLineToArgW failed\n");
+	}
+	else for (int i = 0; i < nArgs; i++) {
+
+		if (wcsstr(szArglist[i], ArgumentName)) {
+			const WCHAR* argumentValue = wcschr(szArglist[i], '=') + 1;
+			return argumentValue;
+		}
+	}
+	LocalFree(szArglist);
+
+	return L"";
+}
 
 /* Retrieve the IP address to connect to from configuration, otherwise default to local */
-const char* GetClientIP() {
-	const char* sDefaultIP = "127.0.0.1";
+const WCHAR* GetClientIP() {
+	const WCHAR* sDefaultIP = L"127.0.0.1"; 
 
-	char sAddr[16];
-	if (GetPrivateProfileStringA("Settings", "ClientIP", sDefaultIP, sAddr, sizeof(sAddr), ".\\Orion.ini")) {
+	const WCHAR* ip = GetParameter(L"--ip");
+	if (wcslen(ip) > 0) {
+		return ip;
+	}
+
+	WCHAR sAddr[500];
+	if (GetPrivateProfileStringW(L"Settings", L"ClientIP", sDefaultIP, sAddr, sizeof(sAddr), L".\\Orion.ini")) {
 		return sAddr;
 	}
 	return sDefaultIP;
+}
+
+unsigned short GetClientPort() {
+
+	const WCHAR* port = GetParameter(L"--port");
+	if (wcslen(port) > 0) {
+		return _wtoi(port);
+	}
+	return 0; 
+ 
+	//if (strstr(sCMD, "-port")) {
+
+	//	char* port = strtok(sCMD, " ");
+	//	int counter = NULL;
+	//	while (port != NULL) {
+	//		size_t tokenLength = strlen(port);
+
+
+	//		printf("port tokens: %s \n", port);
+	//		printf("token length %d \n", strlen(port));
+	//		printf("char at length %c \n", (*(port + tokenLength - 1)));
+
+
+	//		if (counter != NULL) {
+	//			
+	//			if (counter == 2) {
+	//				printf("Returning %d", atoi(port));
+	//				break;
+	//			}
+	//			printf("Counter: %d \n", counter);
+	//			counter++;
+	//		}
+
+	//		if (port[tokenLength - 1] == '"') {
+	//			counter = 1;
+	//		}
+	//		port = strtok(NULL, " ");
+	//	}
+	//	printf("Port returned to hook %d", atoi(port));
+	//	return 0; //atoi(port);
+	//}
+	//return 0;
 }
 
 /* Hooks the Winsock Service Provider's Connect function to redirect the host to a new socket */
@@ -40,20 +113,19 @@ int WINAPI WSPConnect_Hook(SOCKET s, sockaddr* name, int namelen, LPWSABUF lpCal
 	WSAAddressToStringA(name, namelen, NULL, pBuff, &dwStringLength);
 
 	sockaddr_in* addr = reinterpret_cast<sockaddr_in*>(name);
-	unsigned short pPort = htons(addr->sin_port);
 
-	if (strstr(pBuff, NULL_IP)) {
-		if (!pPort) {
-			Log("Unable to resolve IP and Port information. Socket redirection failed.");
-			return FALSE;
-		} else Log("Warning: IP address was null! It has been defaulted to %s because a valid port was provided.", GetClientIP());
-	}
+	unsigned short pPort = htons(GetClientPort());
+	if (pPort == 0) pPort = htons(addr->sin_port);
+	const WCHAR* wcIp = GetClientIP();
+	char pIp[50];
+	wcstombs(pIp, GetClientIP(), 50);
+		
 
-	Log("[WSPConnect_Hook] Address: %s => Port: %d", pBuff, pPort);
+	Log("[WSPConnect_Hook] Address: %s => Port: %d", pIp, ntohs(pPort));
 
 	if (strstr(pBuff, NEXON_IP_NA) || strstr(pBuff, NEXON_IP_SA) || strstr(pBuff, NEXON_IP_EU) || strstr(pBuff, NULL_IP)) {
 		/* Initialize the re-reoute socket address to redirect to */
-		hostent* he = gethostbyname(GetClientIP());
+		hostent* he = gethostbyname(pIp);
 		if (!he) {
 			NotifyMessage("The server is unable to connect or is currently offline.", Orion::NotifyType::Error);
 			ExitProcess(0);
@@ -62,8 +134,12 @@ int WINAPI WSPConnect_Hook(SOCKET s, sockaddr* name, int namelen, LPWSABUF lpCal
 
 		VM_START
 		memcpy(&dwRouteAddress, he->h_addr_list[0], he->h_length);
-		Log("[WSPConnect_Hook] Patching to new address: %s", GetClientIP());
+		Log("[WSPConnect_Hook] Patching to new address: %s", pIp);
 
+		//Back up original port
+		memcpy(&dwOriginalPort, &addr->sin_port, sizeof(DWORD));
+		//Update port 
+		memcpy(&addr->sin_port, &pPort, sizeof(DWORD));
 		/* Copy the original host address and back it up */
 		memcpy(&dwHostAddress, &addr->sin_addr, sizeof(DWORD));
 		/* Update the host address to the route address */
