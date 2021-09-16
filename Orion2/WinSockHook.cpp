@@ -115,13 +115,13 @@ int WINAPI WSPConnect_Hook(SOCKET s, sockaddr* name, int namelen, LPWSABUF lpCal
 	sockaddr_in* addr = reinterpret_cast<sockaddr_in*>(name);
 
 	unsigned short pPort = htons(GetClientPort());
-	if (pPort == 0) pPort = htons(addr->sin_port);
+	if (pPort == 0) pPort = addr->sin_port;
 	const WCHAR* wcIp = GetClientIP();
 	char pIp[50];
 	wcstombs(pIp, GetClientIP(), 50);
 		
 
-	Log("[WSPConnect_Hook] Address: %s => Port: %d", pIp, ntohs(pPort));
+	Log("[WSPConnect_Hook] Address: %s => Port: %d", pIp, pPort);
 
 	if (strstr(pBuff, NEXON_IP_NA) || strstr(pBuff, NEXON_IP_SA) || strstr(pBuff, NEXON_IP_EU) || strstr(pBuff, NULL_IP)) {
 		/* Initialize the re-reoute socket address to redirect to */
